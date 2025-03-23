@@ -5893,6 +5893,7 @@ view.ModelFactoryService = class {
         this.register('./qnn', ['.json', '.bin', '.serialized']);
         this.register('./kann', ['.kann', '.bin', '.kgraph'], [], [/^....KaNN/]);
         this.register('', ['.cambricon', '.vnnmodel', '.nnc']);
+        this.register('./trtengine', ['.json']);
         /* eslint-enable no-control-regex */
     }
 
