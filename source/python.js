@@ -2335,6 +2335,9 @@ python.Execution = class {
             static __new__(cls, ...args) {
                 return execution.invoke(cls, args);
             }
+            static __setattr__(obj, name, value) {
+                builtins.setattr(obj, name, value);
+            }
         });
         this.registerType('builtins.tuple', class extends Array {
             constructor(items) {
@@ -3029,6 +3032,9 @@ python.Execution = class {
                 value.flags = this.flags;
                 return value;
             }
+            reshape(shape, order) {
+                return new numpy.ndarray(shape, this.dtype, this.data, this.offset, this.strides, order);
+            }
             tobytes() {
                 return this.data;
             }
@@ -3223,7 +3229,53 @@ python.Execution = class {
         this.registerType('pandas.core.arrays.categorical.Categorical', class {});
         this.registerType('pandas.core.arrays.datetimes.DatetimeArray', class {});
         this.registerType('pandas.core.arrays.integer.IntegerArray', class {});
-        this.registerType('pandas.core.frame.DataFrame', class {});
+        this.registerType('pandas.core.generic.Flags', class {});
+        this.registerType('pandas.core.generic.NDFrame', class {
+            constructor(data) {
+                this._internal_names = ["_mgr", "_item_cache", "_cache", "_name", "_metadata", "_flags"];
+                this._metadata = [];
+                builtins.object.__setattr__(self, "_mgr", data);
+                builtins.object.__setattr__(self, "_attrs", {});
+                builtins.object.__setattr__(self, "_flags", new pandas.core.generic.Flags(this, true));
+            }
+            __setstate__(state) {
+                if (state instanceof pandas.core.internals.managers.BlockManager) {
+                    this._mgr = state;
+                } else if (state instanceof builtins.dict) {
+                    if (state.__contains__('_data') && !state.__contains__('_mgr')) {
+                        state.__setitem__('_mgr', state.pop('_data'));
+                    }
+                    const typ = state.get('_typ');
+                    if (typ) {
+                        let attrs = state.get('_attrs', new builtins.dict());
+                        if (!attrs) {
+                            attrs = new builtins.dict();
+                        }
+                        builtins.object.__setattr__(this, '_attrs', attrs);
+                        const flags = state.get('_flags', new builtins.dict({ 'allows_duplicate_labels': true }));
+                        builtins.object.__setattr__(this, '_flags', new pandas.core.generic.Flags(this, flags));
+                        const meta = new builtins.set(this._internal_names.concat(this._metadata));
+                        for (const k of meta) {
+                            if (state.__contains__(k) && k !== '_flags') {
+                                const v = state.__getitem__(k);
+                                builtins.object.__setattr__(this, k, v);
+                            }
+                        }
+                        for (const [k, v] of state) {
+                            if (!meta.has(k)) {
+                                builtins.object.__setattr__(this, k, v);
+                            }
+                        }
+                    } else {
+                        throw new python.Error('Pre-0.12 pickles are no longer supported.');
+                    }
+                } else if (state.size === 2) {
+                    throw new python.Error('Pre-0.12 pickles are no longer supported.');
+                }
+            }
+        });
+        this.registerType('pandas.core.frame.DataFrame', class extends pandas.core.generic.NDFrame {
+        });
         this.registerFunction('pandas.core.indexes.base._new_Index', (cls, d) => {
             return new cls(d);
         });
@@ -3342,6 +3394,7 @@ python.Execution = class {
         this.registerType('sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor', class {});
         this.registerType('sklearn.ensemble._iforest.IsolationForest', class {});
         this.registerType('sklearn.ensemble._stacking.StackingClassifier', class {});
+        this.registerType('sklearn.ensemble._stacking.StackingRegressor', class {});
         this.registerType('sklearn.ensemble._voting.VotingClassifier', class {});
         this.registerType('sklearn.ensemble._voting.VotingRegressor', class {});
         this.registerType('sklearn.ensemble._weight_boosting.AdaBoostClassifier', class {});
@@ -4158,6 +4211,7 @@ python.Execution = class {
         this.registerType('xgboost.core.Booster', class {});
         this.registerType('xgboost.sklearn.XGBClassifier', class {});
         this.registerType('xgboost.sklearn.XGBRegressor', class {});
+        this.registerType('xgboost.sklearn.XGBRFClassifier', class {});
         this.registerFunction('_codecs.encode', (obj, encoding) => {
             return execution.invoke('builtins.bytearray', [obj, encoding]);
         });
@@ -4303,7 +4357,16 @@ python.Execution = class {
         this.registerFunction('builtins.setattr', (obj, name, value) => {
             obj[name] = value;
         });
-        this.registerType('builtins.set', class extends Set {});
+        this.registerType('builtins.set', class extends Set {
+            __contains__(item) {
+                return this.has(item);
+            }
+            update(iterable) {
+                for (const item of iterable) {
+                    this.add(item);
+                }
+            }
+        });
         this.registerType('builtins.slice', class {
             constructor(start, stop, step) {
                 this.start = start;
@@ -4660,13 +4723,16 @@ python.Execution = class {
         this.registerFunction('nolearn.lasagne.base.objective');
         this.registerFunction('numpy.core._DType_reconstruct');
         this.registerFunction('numpy.core._ufunc_reconstruct');
-        this.registerFunction('numpy.core.numeric._frombuffer', (/* buf, dtype, shape, order */) => {
-            return {};
-        });
         this.registerFunction('numpy.core.multiarray._reconstruct', (subtype, shape, dtype) => {
             return numpy.ndarray.__new__(subtype, shape, dtype);
         });
-        this.registerFunction('numpy._core.numeric._frombuffer');
+        this.registerFunction('numpy.core.multiarray.frombuffer', (buf, dtype) => {
+            const shape = [buf.length / dtype.itemsize];
+            return new numpy.ndarray(shape, dtype, buf);
+        });
+        this.registerFunction('numpy._core.numeric._frombuffer', (buf, dtype, shape, order) => {
+            return numpy._core.multiarray.frombuffer(buf, dtype).reshape(shape, order);
+        });
         this.registerFunction('numpy._core._internal._convert_to_stringdtype_kwargs', () => {
             return new numpy.dtypes.StringDType();
         });
@@ -4766,6 +4832,7 @@ python.Execution = class {
         this.register('numpy._core.multiarray', numpy.core.multiarray);
         this.register('numpy._core._multiarray_umath', numpy.core._multiarray_umath);
         this.register('numpy._core._multiarray_umath', numpy.core._multiarray_umath);
+        this.register('numpy.core.numeric', numpy._core.numeric);
         numpy._core._multiarray_umath._reconstruct = numpy.core.multiarray._reconstruct;
         this.registerFunction('numpy.load', (file) => {
             // https://github.com/numpy/numpy/blob/main/numpy/lib/format.py
@@ -6827,6 +6894,7 @@ python.Execution = class {
         this.registerType('torch.nn.modules.conv.LazyConv2d', class {});
         this.registerType('torch.nn.modules.conv.LazyConv3d', class {});
         this.registerType('torch.nn.modules.conv.LazyConvTranspose2d', class {});
+        this.registerType('torch.nn.modules.conv.LazyConvTranspose3d', class {});
         this.registerType('torch.nn.modules.distance.CosineSimilarity', class extends torch.nn.modules.module.Module {});
         this.registerType('torch.nn.modules.distance.PairwiseDistance', class extends torch.nn.modules.module.Module {});
         this.registerType('torch.nn.modules.dropout._DropoutNd', class extends torch.nn.modules.module.Module {});
@@ -6844,6 +6912,7 @@ python.Execution = class {
         this.registerType('torch.nn.modules.instancenorm.InstanceNorm2d', class {});
         this.registerType('torch.nn.modules.instancenorm.InstanceNorm3d', class {});
         this.registerType('torch.nn.modules.instancenorm.LazyInstanceNorm2d', class {});
+        this.registerType('torch.nn.modules.instancenorm.LazyInstanceNorm3d', class {});
         this.registerType('torch.nn.modules.linear._LinearWithBias', class {});
         this.registerType('torch.nn.modules.linear.Bilinear', class extends torch.nn.modules.module.Module {});
         this.registerType('torch.nn.modules.linear.Identity', class extends torch.nn.modules.module.Module {});
@@ -6892,9 +6961,11 @@ python.Execution = class {
         this.registerType('torch.nn.modules.padding.ReplicationPad3d', class extends torch.nn.modules.padding._ReplicationPadNd {});
         this.registerType('torch.nn.modules.padding.ZeroPad1d', class {});
         this.registerType('torch.nn.modules.padding.ZeroPad2d', class {});
+        this.registerType('torch.nn.modules.padding.ZeroPad3d', class {});
         this.registerType('torch.nn.modules.padding.ConstantPad1d', class {});
         this.registerType('torch.nn.modules.padding.ConstantPad2d', class {});
         this.registerType('torch.nn.modules.padding.ConstantPad3d', class {});
+        this.registerType('torch.nn.modules.padding.CircularPad3d', class {});
         this.registerType('torch.nn.modules.pixelshuffle.PixelShuffle', class {});
         this.registerType('torch.nn.modules.pixelshuffle.PixelUnshuffle', class {});
         this.registerType('torch.nn.modules.pooling._AdaptiveAvgPoolNd', class extends torch.nn.modules.module.Module {});
@@ -6908,8 +6979,10 @@ python.Execution = class {
         this.registerType('torch.nn.modules.pooling.AvgPool2d', class {});
         this.registerType('torch.nn.modules.pooling.AvgPool3d', class {});
         this.registerType('torch.nn.modules.pooling.FractionalMaxPool2d', class {});
+        this.registerType('torch.nn.modules.pooling.FractionalMaxPool3d', class {});
         this.registerType('torch.nn.modules.pooling.LPPool1d', class {});
         this.registerType('torch.nn.modules.pooling.LPPool2d', class {});
+        this.registerType('torch.nn.modules.pooling.LPPool3d', class {});
         this.registerType('torch.nn.modules.pooling._MaxPoolNd', class extends torch.nn.modules.module.Module {});
         this.registerType('torch.nn.modules.pooling.MaxPool1d', class extends torch.nn.modules.pooling._MaxPoolNd {});
         this.registerType('torch.nn.modules.pooling.MaxPool2d', class extends torch.nn.modules.pooling._MaxPoolNd {});
@@ -7397,6 +7470,7 @@ python.Execution = class {
         this.registerFunction('torch.fx._symbolic_trace.wrap', (fn_or_name) => {
             return fn_or_name;
         });
+        this.registerFunction('torch.fx._symbolic_trace._assert_is_none');
         this.registerFunction('torchvision.datasets.folder.default_loader');
         this.registerType('torchvision.datasets.folder.ImageFolder', class {});
         this.registerType('torchvision.datasets.mnist.FashionMNIST', class {});
@@ -7485,6 +7559,7 @@ python.Execution = class {
         this.registerType('torchvision.models.inception.InceptionC', class {});
         this.registerType('torchvision.models.inception.InceptionD', class {});
         this.registerType('torchvision.models.inception.InceptionE', class {});
+        this.registerFunction('torchvision.models.inception.inception_v3');
         this.registerType('torchvision.models.mnasnet._InvertedResidual', class {});
         this.registerType('torchvision.models.mnasnet.MNASNet', class {});
         this.registerType('torchvision.models.maxvit.MaxVit', class {});
@@ -18431,6 +18506,7 @@ python.Execution = class {
         this.registerType('torch._dynamo.eval_frame.OptimizedModule', class extends torch.nn.modules.module.Module {});
         this.registerType('torch._dynamo.eval_frame.OptimizeContext', class extends torch._dynamo.eval_frame._TorchDynamoContext {});
         this.registerType('torch._dynamo.hooks.Hooks', class {});
+        this.registerType('torch._dynamo.output_graph.GraphCompileReason', class {});
         this.registerType('torch._dynamo.repro.after_dynamo.WrapBackendDebug', class {});
         this.registerType('torch._TorchCompileInductorWrapper', class {});
         this.registerFunction('torch._inductor.compile_fx.compile_fx');
@@ -19101,6 +19177,7 @@ python.Execution = class {
         this.registerType('fastai.vision.augment.Brightness', class {});
         this.registerType('fastai.vision.augment.flip_mat', class {});
         this.registerType('fastai.vision.augment.Flip', class {});
+        this.registerType('fastai.vision.augment.RandomResizedCrop', class {});
         this.registerType('fastai.vision.augment.RandomResizedCropGPU', class {});
         this.registerType('fastai.vision.augment.Resize', class {});
         this.registerType('fastai.vision.augment.rotate_mat', class {});
